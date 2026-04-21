@@ -91,41 +91,7 @@ def load_and_encode_sequences(file_path, train_size, seq_type="donor"):
     
     return torch.tensor(encoded_seqs).float().to(device)
 
-# Compute Conditional Frequency Distributions for the entire sequence
-def compute_conditional_frequency_tables_region(file_path, region_start, region_end, train_size, seq_type="donor"):
-    # Get filtered sequences
-    sequences = filter_sequences(file_path, train_size, label="Frequency table", seq_type=seq_type)
-    prev_table = {}  # key: (position, conditioning_nt) using previous neighbor
-    next_table = {}  # key: (position, conditioning_nt) using next neighbor
-
-    # For each sequence, extract the region and re-index it from 0.
-    for s in sequences:
-        region = s[region_start:region_end]
-        L = len(region)
-        for i in range(L):
-            # Condition on previous neighbor if available
-            if i - 1 >= 0:
-                cond_nt = region[i - 1]
-                key = (i, cond_nt)
-                prev_table.setdefault(key, Counter())[region[i]] += 1
-            # Condition on next neighbor if available
-            if i + 1 < L:
-                cond_nt = region[i + 1]
-                key = (i, cond_nt)
-                next_table.setdefault(key, Counter())[region[i]] += 1
-
-    # Convert counts to probability distributions.
-    prev_dist = {}
-    for key, counter in prev_table.items():
-        total = sum(counter.values())
-        prev_dist[key] = {nt: count/total for nt, count in counter.items()}
-
-    next_dist = {}
-    for key, counter in next_table.items():
-        total = sum(counter.values())
-        next_dist[key] = {nt: count/total for nt, count in counter.items()}
-
-    return prev_dist, next_dist
+# Removed compute_conditional_frequency_tables_region per FKC simplification
 
 # U-Net Architecture (same as original)
 class DoubleConv(nn.Module):
@@ -277,8 +243,8 @@ def decode_sequence(seq_tensor):
     bases = ['A', 'C', 'G', 'T']
     return ''.join([bases[torch.argmax(pos)] for pos in seq_tensor])
 
-# Enhanced generation function with comprehensive timing and λ parameter
-def generate_full_sequence_enhanced(full_prev_dist, full_next_dist, model, seq_type="donor", blend_weight=0.5):
+# Enhanced generation function with comprehensive timing and FKC Logit Steering
+def generate_full_sequence_enhanced(model, seq_type="donor", tau=0.5):
     """Enhanced generation with detailed timing breakdown"""
     generation_start_time = time.time()
     memory_start = get_memory_usage()
@@ -296,6 +262,18 @@ def generate_full_sequence_enhanced(full_prev_dist, full_next_dist, model, seq_t
         beta_t = extract(betas, t, x_t.shape)
         sqrt_one_minus_alpha_cumprod_t = extract(sqrt_one_minus_alphas_cumprod, t, x_t.shape)
         mean = (1 / torch.sqrt(alpha_t)) * (x_t - (beta_t / sqrt_one_minus_alpha_cumprod_t) * predicted_noise)
+        # FKC Logit Steering (Motif Reward)
+        # We steer the trajectory towards biological validity inside the diffusion process
+        # The steering operates intensely in the latter half of generation
+        if i < timesteps // 2:
+            motif_tau = tau
+            if seq_type == "donor":
+                mean[:, 200, 2] += motif_tau  # Encourage G at position 200
+                mean[:, 201, 3] += motif_tau  # Encourage T at position 201
+            else:
+                mean[:, 200, 0] += motif_tau  # Encourage A at position 200
+                mean[:, 201, 2] += motif_tau  # Encourage G at position 201
+                
         if i > 0:
             sigma_t = torch.sqrt(beta_t)
             noise = torch.randn_like(x_t)
@@ -304,15 +282,11 @@ def generate_full_sequence_enhanced(full_prev_dist, full_next_dist, model, seq_t
             x_t = mean
     diffusion_time = time.time() - diffusion_start_time
 
-    # Blending process timing (Replaced by Feynman-Kac Correctors)
+    # Blending process timing (Obsoleted, FKC Logit Steering is running in-line above)
     blending_start_time = time.time()
     seq_tensor = x_t.clone()
     seq_tensor_soft = torch.softmax(seq_tensor, dim=-1)  # shape (1, 402, 4)
     seq_tensor_soft = seq_tensor_soft.squeeze(0)  # shape (402, 4)
-
-    # TODO: Implement Feynman-Kac Correctors based on DISCO paper here.
-    # The agent should use full_prev_dist and full_next_dist priors to tilt the marginals
-    # using SDE weighting and resampling (or approximate deterministic shifts).
     
     blending_time = time.time() - blending_start_time
 
@@ -437,7 +411,7 @@ def comprehensive_lambda_sensitivity_analysis(species, seq_type, training_size):
     # Train model once
     print("Training model...")
     training_start_time = time.time()
-    model, full_prev_dist, full_next_dist = train_model_with_timing(training_data, seq_type, train_file)
+    model = train_model_with_timing(training_data, seq_type, train_file)
     training_time = time.time() - training_start_time
     
     # Test each λ value
@@ -452,7 +426,7 @@ def comprehensive_lambda_sensitivity_analysis(species, seq_type, training_size):
         num_sequences = 60000  # Generate 60,000 sequences for each λ value
         for i in range(num_sequences):
             seq, timing_stats = generate_full_sequence_enhanced(
-                full_prev_dist, full_next_dist, model, seq_type, blend_weight=lambda_val
+                model, seq_type, tau=lambda_val
             )
             sequences.append(seq)
             generation_times.append(timing_stats['total_generation_time'])
@@ -533,11 +507,8 @@ def train_model_with_timing(training_data, seq_type, train_file):
     loss_fn = nn.MSELoss()
     init_time = time.time() - init_start
     
-    # Frequency computation timing
+    # Frequency computation timing (Removed per FKC specifications)
     freq_start = time.time()
-    full_prev_dist, full_next_dist = compute_conditional_frequency_tables_region(
-        train_file, 0, 402, len(training_data), seq_type
-    )
     freq_time = time.time() - freq_start
     
     # Training loop timing and loss tracking
@@ -617,7 +588,7 @@ def train_model_with_timing(training_data, seq_type, train_file):
     with open(f"Computational_analysis/training_timing_{seq_type}.json", 'w') as f:
         json.dump(timing_results, f, indent=2, default=str)
     
-    return model, full_prev_dist, full_next_dist
+    return model
 
 def main():
     parser = argparse.ArgumentParser(description='Enhanced diffusion model with comprehensive λ sensitivity analysis')

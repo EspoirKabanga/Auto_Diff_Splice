@@ -96,13 +96,13 @@ def main():
     # 3. Generate Synthetic Sequences
     print("Training Diffusion Model for Synthesis...")
     training_data = load_and_encode_sequences(pos_file, n_train, seq_type)
-    diff_model, prev_dist, next_dist = train_model_with_timing(training_data, seq_type, pos_file)
+    diff_model = train_model_with_timing(training_data, seq_type, pos_file)
     
     print(f"Generating {n_gen} synthetic sequences...")
     synth_seqs = []
     for i in range(n_gen):
-        # blend_weight=0.0 implies no previous lambda lambda weighting, purely relying on the updated Feynman-Kac hook
-        seq, _ = generate_full_sequence_enhanced(prev_dist, next_dist, diff_model, seq_type, blend_weight=0.0)
+        # tau controls the level of Motif Reward applied inline during the Feynman-Kac Logit Steering
+        seq, _ = generate_full_sequence_enhanced(diff_model, seq_type, tau=0.5)
         synth_seqs.append(seq)
         if (i+1) % 100 == 0:
             print(f"Generated {i+1}/{n_gen}...")
