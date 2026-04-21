@@ -10,7 +10,7 @@ sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 
 from indirect_models import create_spliceator_model
-from diffusion_feynman import load_and_encode_sequences, train_model_with_timing, generate_full_sequence_enhanced
+from splice_diffusion_feynman import load_and_encode_sequences, train_model_with_timing, generate_full_sequence_enhanced
 
 device = torch.device('cuda:0' if torch.cuda.is_available() else 'cpu')
 
@@ -59,7 +59,7 @@ def load_text_seqs(filepath, max_items):
     return seqs
 
 def main():
-    print("Evaluating current diffusion_feynman.py...")
+    print("Evaluating current splice_diffusion_feynman.py...")
     # 1. Dataset variables
     species = "homo"
     seq_type = "acceptor"
